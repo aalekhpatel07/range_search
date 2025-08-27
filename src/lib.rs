@@ -4,7 +4,6 @@ mod automata;
 
 pub use automata::*;
 
-
 /// A builder for creating a vector set.
 ///
 /// This is not your average everyday builder. It has two important qualities
@@ -36,7 +35,7 @@ pub use automata::*;
 /// This shows how to use the builder to construct a vector set in memory. Note that
 /// `VectorSet::from_iter` provides a convenience function that achieves this same
 /// goal without needing to explicitly use `SetBuilder`.
-/// 
+///
 /// ```rust
 /// use fst::{IntoStreamer, Streamer};
 /// use vector_set::{VectorSetBuilder, VectorSet};
@@ -58,8 +57,8 @@ pub use automata::*;
 ///     keys.push(key.to_vec());
 /// }
 /// assert_eq!(keys, vec![
-///     vec![1, 1, 2, 3], 
-///     vec![1, 2, 2, 3], 
+///     vec![1, 1, 2, 3],
+///     vec![1, 2, 2, 3],
 ///     vec![2, 255, 2, 3],
 /// ]);
 /// ```
@@ -95,15 +94,14 @@ pub use automata::*;
 ///     keys.push(key.to_vec());
 /// }
 /// assert_eq!(keys, vec![
-///     vec![1, 1, 2, 3], 
-///     vec![1, 2, 2, 3], 
+///     vec![1, 1, 2, 3],
+///     vec![1, 2, 2, 3],
 ///     vec![2, 255, 2, 3],
 /// ]);
 /// ```
 pub struct VectorSetBuilder<const N: usize, W>(fst::raw::Builder<W>);
 
 impl<const N: usize> VectorSetBuilder<N, Vec<u8>> {
-
     /// Create a builder that builds a vector set in memory.
     #[inline]
     pub fn memory() -> Self {
@@ -115,7 +113,6 @@ impl<const N: usize> VectorSetBuilder<N, Vec<u8>> {
     pub fn into_vector_set(self) -> VectorSet<N, Vec<u8>> {
         VectorSet(self.0.into_fst())
     }
-
 }
 
 /// A specialized stream for mapping vector set streams (`&[u8]`) to streams used
@@ -133,7 +130,6 @@ impl<'a, S: Streamer<'a>> Streamer<'a> for StreamZeroOutput<S> {
     }
 }
 
-
 impl<const N: usize, W: std::io::Write> VectorSetBuilder<N, W> {
     /// Create a builder that builds a set of vectors by writing it to `wtr` in a
     /// streaming fashion.
@@ -149,7 +145,10 @@ impl<const N: usize, W: std::io::Write> VectorSetBuilder<N, W> {
     pub fn insert<K: AsRef<[u8]>>(&mut self, key: K) -> fst::Result<()> {
         let key = key.as_ref();
         if key.len() != N {
-            return Err(fst::Error::Fst(fst::raw::Error::WrongType { expected: {N as u64}, got: key.len() as u64 }));
+            return Err(fst::Error::Fst(fst::raw::Error::WrongType {
+                expected: { N as u64 },
+                got: key.len() as u64,
+            }));
         }
         self.0.add(key)
     }
@@ -203,22 +202,20 @@ impl<const N: usize, W: std::io::Write> VectorSetBuilder<N, W> {
     pub fn bytes_written(&self) -> u64 {
         self.0.bytes_written()
     }
-
 }
 
 pub struct VectorSet<const N: usize, D>(Fst<D>);
 
 #[allow(clippy::should_implement_trait)]
-impl<const N: usize> VectorSet<N, Vec<u8>>
-{
+impl<const N: usize> VectorSet<N, Vec<u8>> {
     /// Create a vector set from an iterator of vectors
     /// of the assumed size.
-    pub fn from_iter<I, K>(iter: I) -> fst::Result<VectorSet<N, Vec<u8>>> 
-    where 
-        I: Iterator<Item=K>,
-        K: AsRef<[u8]>
+    pub fn from_iter<I, K>(iter: I) -> fst::Result<VectorSet<N, Vec<u8>>>
+    where
+        I: Iterator<Item = K>,
+        K: AsRef<[u8]>,
     {
-        let mut builder=  VectorSetBuilder::memory();
+        let mut builder = VectorSetBuilder::memory();
         for item in iter {
             let key = item.as_ref();
             builder.insert(key)?;
@@ -228,9 +225,9 @@ impl<const N: usize> VectorSet<N, Vec<u8>>
 }
 
 impl<const N: usize, D> VectorSet<N, D>
-where D: AsRef<[u8]>
+where
+    D: AsRef<[u8]>,
 {
-
     /// Creates a vector set from its representation as a raw byte sequence.
     ///
     /// This accepts anything that can be cheaply converted to a `&[u8]`. The
@@ -256,16 +253,16 @@ where D: AsRef<[u8]>
         fst::raw::Fst::new(data).map(VectorSet)
     }
 
-    /// Get a stream of vectors stored in the set 
-    /// that are at most the given distance away from the 
+    /// Get a stream of vectors stored in the set
+    /// that are at most the given distance away from the
     /// query vector.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```rust
     /// use vector_set::VectorSet;
     /// use fst::IntoStreamer;
-    /// 
+    ///
     /// let mut data: Vec<[u8; 144]> = vec![
     ///     [0; 144],
     ///     [1; 144],
@@ -281,23 +278,28 @@ where D: AsRef<[u8]>
     ///     vec![2; 144],
     /// ]);
     /// ```
-    pub fn neighbors_within_range_l2<'own, 'q>(&'own self, query: &'q [u8], max_distance_squared: f32) -> fst::raw::Stream<'own, VectorSetAutomata<'q, N>>
-    where 'own: 'q
+    pub fn neighbors_within_range_l2<'own, 'q>(
+        &'own self,
+        query: &'q [u8],
+        max_distance_squared: f32,
+    ) -> fst::raw::Stream<'own, VectorSetAutomata<'q, N>>
+    where
+        'own: 'q,
     {
         let aut = VectorSetAutomata::<N>::new(query, Budget::L2(max_distance_squared));
         self.0.search(aut).into_stream()
     }
 
-    /// Get a stream of vectors stored in the set 
-    /// that are at most the given distance away from the 
+    /// Get a stream of vectors stored in the set
+    /// that are at most the given distance away from the
     /// query vector.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```rust
     /// use vector_set::VectorSet;
     /// use fst::IntoStreamer;
-    /// 
+    ///
     /// let mut data: Vec<[u8; 2]> = vec![
     ///     [255, 255],
     ///     [0, 0]
@@ -311,8 +313,13 @@ where D: AsRef<[u8]>
     ///     vec![0, 0],
     /// ]);
     /// ```
-    pub fn neighbors_within_range_hamming<'own, 'q>(&'own self, query: &'q [u8], max_distance: i64) -> fst::raw::Stream<'own, VectorSetAutomata<'q, N>>
-    where 'own: 'q
+    pub fn neighbors_within_range_hamming<'own, 'q>(
+        &'own self,
+        query: &'q [u8],
+        max_distance: i64,
+    ) -> fst::raw::Stream<'own, VectorSetAutomata<'q, N>>
+    where
+        'own: 'q,
     {
         let aut = VectorSetAutomata::<N>::new(query, Budget::Hamming(max_distance));
         self.0.search(aut).into_stream()
@@ -347,21 +354,16 @@ impl<'a, 's, A: Automaton> Streamer<'a> for Stream<'s, A> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fst::raw::Builder;
     use fst::IntoStreamer;
+    use fst::raw::Builder;
 
     #[test]
     fn automaton_works() {
         let mut builder = Builder::memory();
-        let mut data = vec![
-            [0u8, 255, 255, 255],
-            [255, 255, 255, 255],
-            [1, 1, 1, 1],
-        ];
+        let mut data = vec![[0u8, 255, 255, 255], [255, 255, 255, 255], [1, 1, 1, 1]];
         data.sort();
 
         for vector in data {
@@ -380,19 +382,14 @@ mod tests {
 
     #[test]
     fn vectorset_works() {
-        let mut data: Vec<[u8; 144]> = vec![
-            [0; 144],
-            [1; 144],
-            [2; 144],
-        ];
+        let mut data: Vec<[u8; 144]> = vec![[0; 144], [1; 144], [2; 144]];
         data.sort();
 
         let vset = VectorSet::<144, _>::from_iter(data.iter()).unwrap();
-        let stream = vset.neighbors_within_range_l2(&[3u8; 144], 144.0 * 2.0 * 2.0).into_stream();
-        let neighbors= stream.into_byte_keys();
-        assert_eq!(neighbors, vec![
-            data[1],
-            data[2],
-        ]);
+        let stream = vset
+            .neighbors_within_range_l2(&[3u8; 144], 144.0 * 2.0 * 2.0)
+            .into_stream();
+        let neighbors = stream.into_byte_keys();
+        assert_eq!(neighbors, vec![data[1], data[2],]);
     }
 }

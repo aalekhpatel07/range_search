@@ -7,11 +7,10 @@ pub enum Budget {
 }
 
 impl Budget {
-    pub fn is_non_negative(&self) -> bool
-    {
+    pub fn is_non_negative(&self) -> bool {
         match self {
             Budget::Hamming(d) => *d >= 0,
-            Budget::L2(d) => *d >= 0.
+            Budget::L2(d) => *d >= 0.,
         }
     }
 
@@ -20,7 +19,7 @@ impl Budget {
             Budget::Hamming(remaining) => {
                 let step_by = i64::from((from ^ to).count_ones());
                 Budget::Hamming((*remaining).saturating_sub(step_by))
-            },
+            }
             Budget::L2(remaining) => {
                 let from = from as f32;
                 let to = to as f32;
@@ -36,7 +35,7 @@ impl std::fmt::Display for Budget {
         match self {
             Budget::Hamming(v) => {
                 write!(f, "{}", *v)
-            },
+            }
             Budget::L2(v) => {
                 write!(f, "{:.3}", *v)
             }
@@ -45,22 +44,19 @@ impl std::fmt::Display for Budget {
 }
 
 #[derive(Debug)]
-pub struct VectorSetAutomata<'a, const N: usize>
-{
+pub struct VectorSetAutomata<'a, const N: usize> {
     query: &'a [u8],
     max_distance: Budget,
 }
 
-impl<'a, const N: usize> VectorSetAutomata<'a, N>
-{
+impl<'a, const N: usize> VectorSetAutomata<'a, N> {
     pub fn new(query: &'a [u8], max_distance: Budget) -> Self {
         Self {
             query,
-            max_distance
+            max_distance,
         }
     }
 }
-
 
 #[derive(Debug, Clone, Copy)]
 pub struct VectorSetAutomataState {
@@ -75,19 +71,22 @@ impl std::fmt::Display for VectorSetAutomataState {
     }
 }
 
-impl<const N: usize> Automaton for VectorSetAutomata<'_, N>
-{
+impl<const N: usize> Automaton for VectorSetAutomata<'_, N> {
     type State = VectorSetAutomataState;
 
     fn start(&self) -> Self::State {
-        VectorSetAutomataState { budget: self.max_distance, position: 0, query_is_bad_size: self.query.len() != { N } }
+        VectorSetAutomataState {
+            budget: self.max_distance,
+            position: 0,
+            query_is_bad_size: self.query.len() != { N },
+        }
     }
     fn accept(&self, state: &Self::State, byte: u8) -> Self::State {
-        VectorSetAutomataState { 
+        VectorSetAutomataState {
             // try to take a step, consuming some of our budget.
-            budget: state.budget.step(self.query[state.position], byte), 
+            budget: state.budget.step(self.query[state.position], byte),
             position: state.position + 1,
-            query_is_bad_size: false
+            query_is_bad_size: false,
         }
     }
 
@@ -95,7 +94,7 @@ impl<const N: usize> Automaton for VectorSetAutomata<'_, N>
         if state.query_is_bad_size {
             return false;
         }
-        state.position == {N} && state.budget.is_non_negative()
+        state.position == { N } && state.budget.is_non_negative()
     }
 
     fn can_match(&self, state: &Self::State) -> bool {
@@ -105,8 +104,8 @@ impl<const N: usize> Automaton for VectorSetAutomata<'_, N>
             return false;
         }
         // our scanned vector is larger than what we're expecting.
-        if state.position > {N} {
-            return false
+        if state.position > { N } {
+            return false;
         }
         // can only match if there is any budget left at all.
         state.budget.is_non_negative()
