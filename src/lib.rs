@@ -206,23 +206,9 @@ impl<const N: usize, W: std::io::Write> VectorSetBuilder<N, W> {
 
 }
 
-
-impl<const N: usize, A> FromIterator<A> for VectorSet<N, Vec<u8>>
-where
-    A: AsRef<[u8]>
-{
-    fn from_iter<T: IntoIterator<Item = A>>(iter: T) -> Self {
-        let mut builder = VectorSetBuilder::<N, _>::memory();
-        for item in iter {
-            builder.insert(item.as_ref()).unwrap();
-        }
-        builder.into_vector_set()
-    }
-}
-
-
 pub struct VectorSet<const N: usize, D>(Fst<D>);
 
+#[allow(clippy::should_implement_trait)]
 impl<const N: usize> VectorSet<N, Vec<u8>>
 {
     /// Create a vector set from an iterator of vectors

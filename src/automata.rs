@@ -80,7 +80,7 @@ impl<const N: usize> Automaton for VectorSetAutomata<'_, N>
     type State = VectorSetAutomataState;
 
     fn start(&self) -> Self::State {
-        VectorSetAutomataState { budget: self.max_distance, position: 0, query_is_bad_size: self.query.len() != { N as usize } }
+        VectorSetAutomataState { budget: self.max_distance, position: 0, query_is_bad_size: self.query.len() != { N } }
     }
     fn accept(&self, state: &Self::State, byte: u8) -> Self::State {
         VectorSetAutomataState { 
@@ -95,7 +95,7 @@ impl<const N: usize> Automaton for VectorSetAutomata<'_, N>
         if state.query_is_bad_size {
             return false;
         }
-        state.position == {N as usize} && state.budget.is_non_negative()
+        state.position == {N} && state.budget.is_non_negative()
     }
 
     fn can_match(&self, state: &Self::State) -> bool {
@@ -105,7 +105,7 @@ impl<const N: usize> Automaton for VectorSetAutomata<'_, N>
             return false;
         }
         // our scanned vector is larger than what we're expecting.
-        if state.position > {N as usize} {
+        if state.position > {N} {
             return false
         }
         // can only match if there is any budget left at all.
