@@ -1,114 +1,111 @@
 use fst::Automaton;
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-pub enum Cost {
-    L2(f32),
-    Hamming(i64),
-}
-
-impl Cost {
-    pub fn is_non_negative(&self) -> bool {
-        match self {
-            Cost::Hamming(d) => *d >= 0,
-            Cost::L2(d) => d.is_sign_positive(),
-        }
-    }
-
-    pub fn step(&self, from: u8, to: u8) -> Cost {
-        match self {
-            Cost::Hamming(remaining) => {
-                let step_by = i64::from((from ^ to).count_ones());
-                Cost::Hamming((*remaining).saturating_sub(step_by))
-            }
-            Cost::L2(remaining) => {
-                let from = from as f32;
-                let to = to as f32;
-                let step_by = (from - to) * (from - to);
-                Cost::L2(*remaining - step_by)
-            }
-        }
-    }
-}
-
-impl std::fmt::Display for Cost {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Cost::Hamming(v) => {
-                write!(f, "{}", *v)
-            }
-            Cost::L2(v) => {
-                write!(f, "{:.3}", *v)
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
 pub struct RangeSearch<'a, const N: usize> {
     query: &'a [u8],
-    max_distance: Cost,
+    max_distance: f32,
+    distance_fn: Box<dyn Fn(u8, u8) -> f32>
 }
 
-impl<'a, const N: usize> RangeSearch<'a, N> {
-    pub fn new(query: &'a [u8], max_distance: Cost) -> Self {
+impl<'a, const N: usize> RangeSearch<'a, N> 
+{
+    /// Create a RangeSearch automaton that accepts byte vectors of a given dimension
+    /// only if they are at most a given distance apart where the distances are calculated
+    /// according to a given distance function.
+    /// 
+    /// Note: The stream of vectors returned aren't returned in the order of distances but the order
+    /// in which they were inserted in the underlying `fst::Fst`.
+    /// # Examples
+    /// 
+    /// - An automaton that accepts only (144,)-u8 vectors if they are within a squared L2-distance
+    /// of 100_000.0 apart of a given query vector.
+    /// ```rust
+    /// use range_search::RangeSearch;
+    /// use fst::{Automaton, set::{Set, SetBuilder}, IntoStreamer, Streamer};
+    /// 
+    /// fn l2_step(from: u8, to: u8) -> f32 {
+    ///     (from as f32 - to as f32) * (from as f32 - to as f32)
+    /// }
+    /// 
+    /// let query = [0x01; 144];
+    /// let aut = RangeSearch::<144>::new(&query, 100_000.0, l2_step);
+    /// 
+    /// // Suppose you have some fst::Set of vectors.
+    /// let set = SetBuilder::memory().into_set();
+    /// 
+    /// // Iterate over the set of vectors close enough to the query vector.
+    /// let mut stream = set.search(aut).into_stream();
+    /// while let Some(hit) = stream.next() {
+    ///     eprintln!("found a vector within the given range of the query vector {hit:#?}");
+    /// }
+    /// ```
+    pub fn new<F>(query: &'a [u8], max_distance: f32, distance_fn: F) -> Self 
+    where 
+        F: Fn(u8, u8) -> f32 + 'static
+    {
         Self {
             query,
             max_distance,
+            distance_fn: Box::new(distance_fn),
+        }
+    }
+
+    pub fn new_hamming(query: &'a [u8], max_distance: usize) -> Self {
+        Self {
+            query,
+            max_distance: max_distance as f32,
+            distance_fn: Box::new(hamming_step),
+        }
+    }
+
+    pub fn new_l2(query: &'a [u8], max_distance_squared: f32) -> Self {
+        Self {
+            query,
+            max_distance: max_distance_squared as f32,
+            distance_fn: Box::new(l2_step),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct RangeSearchState {
-    budget: Cost,
-    position: usize,
-    query_is_bad_size: bool,
+
+pub fn hamming_step(from: u8, to: u8) -> f32 {
+    (from ^ to).count_ones() as f32
 }
 
-impl std::fmt::Display for RangeSearchState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "(budget: {}, position: {})", self.budget, self.position)
-    }
+pub fn l2_step(from: u8, to: u8) -> f32 {
+    (from as f32 - to as f32) * (from as f32 - to as f32)
 }
 
 impl<const N: usize> Automaton for RangeSearch<'_, N> {
-    type State = RangeSearchState;
+    type State = (f32, usize, bool);
 
     fn start(&self) -> Self::State {
-        RangeSearchState {
-            budget: self.max_distance,
-            position: 0,
-            query_is_bad_size: self.query.len() != { N },
-        }
+        (self.max_distance, 0, self.query.len() != { N })
     }
+
     fn accept(&self, state: &Self::State, byte: u8) -> Self::State {
-        RangeSearchState {
-            // try to take a step, consuming some of our budget.
-            budget: state.budget.step(self.query[state.position], byte),
-            position: state.position + 1,
-            query_is_bad_size: false,
-        }
+        let step_by = (&self.distance_fn)(self.query[state.1], byte);
+        (state.0 - step_by, state.1 + 1, false)
     }
 
     fn is_match(&self, state: &Self::State) -> bool {
-        if state.query_is_bad_size {
+        if state.2 {
             return false;
         }
-        state.position == { N } && state.budget.is_non_negative()
+        state.1 == { N } && state.0.is_sign_positive()
     }
 
     fn can_match(&self, state: &Self::State) -> bool {
         // we already know the query vector is of an incompatible
         // size.
-        if state.query_is_bad_size {
+        if state.2 {
             return false;
         }
         // our scanned vector is larger than what we're expecting.
-        if state.position > { N } {
+        if state.1 > { N } {
             return false;
         }
         // can only match if there is any budget left at all.
-        state.budget.is_non_negative()
+        state.0.is_sign_positive()
     }
 }
 
@@ -134,6 +131,7 @@ mod tests {
         vectors
     }
 
+
     #[test]
     fn automaton_works() {
         let mut builder = SetBuilder::memory();
@@ -148,7 +146,10 @@ mod tests {
 
         let query = [0, 0, 0, 0];
 
-        let aut = RangeSearch::<4>::new(&query, Cost::Hamming(5));
+        let aut = RangeSearch::<4>::new_hamming(
+            &query, 
+            5,
+        );
         let stream = set.search(aut).into_stream();
         let observed_matches = stream.into_bytes();
         assert_eq!(observed_matches, vec![vec![1, 1, 1, 1]]);
@@ -179,7 +180,11 @@ mod tests {
         let query = generate_data::<144>(1)[0];
 
         let max_distance: f32 = 1_500_000.0;
-        let aut = RangeSearch::<144>::new(&query, Cost::L2(max_distance));
+        let aut = RangeSearch::<144>::new(
+            &query, 
+            max_distance,
+            l2_step
+        );
         let mut stream = map.search(aut).into_stream();
         let mut hit_indices = HashSet::new();
 
@@ -234,11 +239,14 @@ mod tests {
         let mut search_times = Vec::with_capacity(num_searches);
         let mut seen = 0;
         for query in queries {
-            let aut = RangeSearch::<144>::new(&query, Cost::L2(max_distance));
+            let aut = RangeSearch::<144>::new_l2(
+                &query, 
+                max_distance,
+            );
             let mut stream = set.search_with_state(aut).into_stream();
             let search_time = std::time::Instant::now();
             if let Some((_hit, state)) = stream.next() {
-                eprintln!("hit state: {state}");
+                eprintln!("hit state: {state:?}");
                 // found some hit.
                 hits += 1;
             }
