@@ -3,44 +3,43 @@ use fst::Automaton;
 pub struct RangeSearch<'a, const N: usize> {
     query: &'a [u8],
     max_distance: f32,
-    distance_fn: Box<dyn Fn(u8, u8) -> f32>
+    distance_fn: Box<dyn Fn(u8, u8) -> f32>,
 }
 
-impl<'a, const N: usize> RangeSearch<'a, N> 
-{
+impl<'a, const N: usize> RangeSearch<'a, N> {
     /// Create a RangeSearch automaton that accepts byte vectors of a given dimension
     /// only if they are at most a given distance apart where the distances are calculated
     /// according to a given distance function.
-    /// 
+    ///
     /// Note: The stream of vectors returned aren't returned in the order of distances but the order
     /// in which they were inserted in the underlying `fst::Fst`.
     /// # Examples
-    /// 
+    ///
     /// - An automaton that accepts only (144,)-u8 vectors if they are within a squared L2-distance
     ///   of 100_000.0 apart of a given query vector.
     /// ```rust
     /// use range_search::RangeSearch;
     /// use fst::{Automaton, set::{Set, SetBuilder}, IntoStreamer, Streamer};
-    /// 
+    ///
     /// fn l2_step(from: u8, to: u8) -> f32 {
     ///     (from as f32 - to as f32) * (from as f32 - to as f32)
     /// }
-    /// 
+    ///
     /// let query = [0x01; 144];
     /// let aut = RangeSearch::<144>::new(&query, 100_000.0, l2_step);
-    /// 
+    ///
     /// // Suppose you have some fst::Set of vectors.
     /// let set = SetBuilder::memory().into_set();
-    /// 
+    ///
     /// // Iterate over the set of vectors close enough to the query vector.
     /// let mut stream = set.search(aut).into_stream();
     /// while let Some(hit) = stream.next() {
     ///     eprintln!("found a vector within the given range of the query vector {hit:#?}");
     /// }
     /// ```
-    pub fn new<F>(query: &'a [u8], max_distance: f32, distance_fn: F) -> Self 
-    where 
-        F: Fn(u8, u8) -> f32 + 'static
+    pub fn new<F>(query: &'a [u8], max_distance: f32, distance_fn: F) -> Self
+    where
+        F: Fn(u8, u8) -> f32 + 'static,
     {
         Self {
             query,
@@ -65,7 +64,6 @@ impl<'a, const N: usize> RangeSearch<'a, N>
         }
     }
 }
-
 
 pub fn hamming_step(from: u8, to: u8) -> f32 {
     (from ^ to).count_ones() as f32
@@ -114,14 +112,14 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
-    use fst::{IntoStreamer, MapBuilder, Streamer};
-    use fst::set::SetBuilder;
-    use rand::{prelude::*, rng};
     use arbitrary::{Arbitrary, Unstructured};
+    use fst::set::SetBuilder;
+    use fst::{IntoStreamer, MapBuilder, Streamer};
+    use rand::{prelude::*, rng};
 
     fn generate_data<const SIZE: usize>(count: usize) -> Vec<[u8; SIZE]> {
         let mut rng = rng();
-        let mut buffer=  [0u8; 1024];
+        let mut buffer = [0u8; 1024];
         let mut vectors = vec![];
         for _ in 0..count {
             rng.fill_bytes(&mut buffer);
@@ -130,7 +128,6 @@ mod tests {
         }
         vectors
     }
-
 
     #[test]
     fn automaton_works() {
@@ -146,10 +143,7 @@ mod tests {
 
         let query = [0, 0, 0, 0];
 
-        let aut = RangeSearch::<4>::new_hamming(
-            &query, 
-            5,
-        );
+        let aut = RangeSearch::<4>::new_hamming(&query, 5);
         let stream = set.search(aut).into_stream();
         let observed_matches = stream.into_bytes();
         assert_eq!(observed_matches, vec![vec![1, 1, 1, 1]]);
@@ -180,34 +174,27 @@ mod tests {
         let query = generate_data::<144>(1)[0];
 
         let max_distance: f32 = 1_500_000.0;
-        let aut = RangeSearch::<144>::new(
-            &query, 
-            max_distance,
-            l2_step
-        );
+        let aut = RangeSearch::<144>::new(&query, max_distance, l2_step);
         let mut stream = map.search(aut).into_stream();
         let mut hit_indices = HashSet::new();
 
         while let Some((key, idx)) = stream.next() {
-            let distance=  naive_distance_l2(&query, key);
+            let distance = naive_distance_l2(&query, key);
             assert!(distance <= max_distance);
             hit_indices.insert(idx);
         }
         eprintln!("hits: {}", hit_indices.len());
-        let non_hits: Vec<_> = 
-            data_with_ids
+        let non_hits: Vec<_> = data_with_ids
             .iter()
-            .filter_map(|(idx, vector)| {
-                match hit_indices.contains(&(*idx as u64)) {
-                    false => Some(*vector),
-                    true => None
-                }
+            .filter_map(|(idx, vector)| match hit_indices.contains(&(*idx as u64)) {
+                false => Some(*vector),
+                true => None,
             })
             .collect();
-    
+
         eprintln!("non hits: {}", non_hits.len());
         for non_hit in non_hits {
-            let distance=  naive_distance_l2(&query, &non_hit);
+            let distance = naive_distance_l2(&query, &non_hit);
             assert!(distance > max_distance);
         }
     }
@@ -228,7 +215,7 @@ mod tests {
         }
         let set = builder.into_set();
         eprintln!("finished generating set. begin searches.");
-        
+
         let num_searches: usize = 1_000;
         // generate search queries.
         let queries: Vec<[u8; SIZE]> = generate_data::<SIZE>(num_searches);
@@ -239,10 +226,7 @@ mod tests {
         let mut search_times = Vec::with_capacity(num_searches);
         let mut seen = 0;
         for query in queries {
-            let aut = RangeSearch::<144>::new_l2(
-                &query, 
-                max_distance,
-            );
+            let aut = RangeSearch::<144>::new_l2(&query, max_distance);
             let mut stream = set.search_with_state(aut).into_stream();
             let search_time = std::time::Instant::now();
             if let Some((_hit, state)) = stream.next() {
@@ -256,14 +240,15 @@ mod tests {
             search_times.push(elapsed.as_nanos());
         }
         eprintln!(
-            "search times (ns): max={} min={} mean={} total={} hits={}", 
+            "search times (ns): max={} min={} mean={} total={} hits={}",
             search_times.iter().max().unwrap(),
             search_times.iter().min().unwrap(),
             search_times.iter().copied().sum::<u128>() / search_times.len() as u128,
             num_searches,
             hits,
         );
-        eprintln!("total hits: {hits} at max_distance={max_distance:.4} out of {num_searches} queries against {count} vectors.");
-
+        eprintln!(
+            "total hits: {hits} at max_distance={max_distance:.4} out of {num_searches} queries against {count} vectors."
+        );
     }
 }
