@@ -5,6 +5,9 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Aalekh Patel <aalekh.gwpeck.7998@icloud.com>"]
 readme = "README.md"
+license-file= "LICENSE.md"
+homepage = "https://github.com/aalekhpatel07/range_search"
+repository = "https://github.com/aalekhpatel07/range_search"
 
 [dependencies]
 fst = "0.4.7"
