@@ -1,395 +1,261 @@
-use fst::raw::{Builder, Fst};
-use fst::{Automaton, IntoStreamer, Streamer};
-mod automata;
+use fst::Automaton;
 
-pub use automata::*;
-
-/// A builder for creating a vector set.
-///
-/// This is not your average everyday builder. It has two important qualities
-/// that make it a bit unique from what you might expect:
-///
-/// 1. All keys must be added in lexicographic order. Adding a key out of order
-///    will result in an error.
-/// 2. The representation of a vector set is streamed to *any* `io::Write` as it is
-///    built. For an in memory representation, this can be a `Vec<u8>`.
-///
-/// Point (2) is especially important because it means that a vector set can be
-/// constructed *without storing the entire vector set in memory*. Namely, since it
-/// works with any `io::Write`, it can be streamed directly to a file.
-///
-/// With that said, the builder does use memory, but **memory usage is bounded
-/// to a constant size**. The amount of memory used trades off with the
-/// compression ratio. Currently, the implementation hard codes this trade off
-/// which can result in about 5-20MB of heap usage during construction. (N.B.
-/// Guaranteeing a maximal compression ratio requires memory proportional to
-/// the size of the set, which defeats the benefit of streaming it to disk.
-/// In practice, a small bounded amount of memory achieves close-to-minimal
-/// compression ratios.)
-///
-/// The algorithmic complexity of set construction is `O(n)` where `n` is the
-/// number of vectors added to the vector set.
-///
-/// # Example: build in memory
-///
-/// This shows how to use the builder to construct a vector set in memory. Note that
-/// `VectorSet::from_iter` provides a convenience function that achieves this same
-/// goal without needing to explicitly use `SetBuilder`.
-///
-/// ```rust
-/// use fst::{IntoStreamer, Streamer};
-/// use vector_set::{VectorSetBuilder, VectorSet};
-///
-/// let mut build = VectorSetBuilder::<4, Vec<u8>>::memory();
-/// build.insert(&[1, 1, 2, 3]).unwrap();
-/// build.insert(&[1, 2, 2, 3]).unwrap();
-/// build.insert(&[2, 255, 2, 3]).unwrap();
-///
-/// // You could also call `finish()` here, but since we're building the vector set in
-/// // memory, there would be no way to get the `Vec<u8>` back.
-/// let bytes = build.into_inner().unwrap();
-///
-/// // At this point, the set has been constructed, but here's how to read it.
-/// let vset = VectorSet::<4, _>::new(bytes).unwrap();
-/// let mut stream = vset.into_stream();
-/// let mut keys = vec![];
-/// while let Some(key) = stream.next() {
-///     keys.push(key.to_vec());
-/// }
-/// assert_eq!(keys, vec![
-///     vec![1, 1, 2, 3],
-///     vec![1, 2, 2, 3],
-///     vec![2, 255, 2, 3],
-/// ]);
-/// ```
-///
-/// # Example: stream to file
-///
-/// This shows how to stream construction of a set to a file.
-///
-/// ```rust,no_run
-/// use std::fs::File;
-/// use std::io;
-///
-/// use fst::{IntoStreamer, Streamer, Set, SetBuilder};
-/// use vector_set::{VectorSetBuilder, VectorSet};
-///
-/// let mut wtr = io::BufWriter::new(File::create("set.fst").unwrap());
-/// let mut build = VectorSetBuilder::<4, _>::new(wtr).unwrap();
-/// build.insert(&[1, 1, 2, 3]).unwrap();
-/// build.insert(&[1, 2, 2, 3]).unwrap();
-/// build.insert(&[2, 255, 2, 3]).unwrap();
-///
-/// // If you want the writer back, then call `into_inner`. Otherwise, this
-/// // will finish construction and call `flush`.
-/// build.finish().unwrap();
-///
-/// // At this point, the set has been constructed, but here's how to read it.
-/// // NOTE: Normally, one would memory map a file instead of reading its
-/// // entire contents on to the heap.
-/// let vset = VectorSet::<4, _>::new(std::fs::read("set.fst").unwrap()).unwrap();
-/// let mut stream = vset.into_stream();
-/// let mut keys = vec![];
-/// while let Some(key) = stream.next() {
-///     keys.push(key.to_vec());
-/// }
-/// assert_eq!(keys, vec![
-///     vec![1, 1, 2, 3],
-///     vec![1, 2, 2, 3],
-///     vec![2, 255, 2, 3],
-/// ]);
-/// ```
-pub struct VectorSetBuilder<const N: usize, W>(fst::raw::Builder<W>);
-
-impl<const N: usize> VectorSetBuilder<N, Vec<u8>> {
-    /// Create a builder that builds a vector set in memory.
-    #[inline]
-    pub fn memory() -> Self {
-        Self(Builder::memory())
-    }
-
-    /// Finishes the construction of the set and returns it.
-    #[inline]
-    pub fn into_vector_set(self) -> VectorSet<N, Vec<u8>> {
-        VectorSet(self.0.into_fst())
-    }
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub enum Cost {
+    L2(f32),
+    Hamming(i64),
 }
 
-/// A specialized stream for mapping vector set streams (`&[u8]`) to streams used
-/// by raw fsts (`(&[u8], Output)`).
-///
-/// If this were iterators, we could use `iter::Map`, but doing this on streams
-/// requires HKT, so we need to write out the monomorphization ourselves.
-struct StreamZeroOutput<S>(S);
-
-impl<'a, S: Streamer<'a>> Streamer<'a> for StreamZeroOutput<S> {
-    type Item = (S::Item, fst::raw::Output);
-
-    fn next(&'a mut self) -> Option<(S::Item, fst::raw::Output)> {
-        self.0.next().map(|key| (key, fst::raw::Output::zero()))
-    }
-}
-
-impl<const N: usize, W: std::io::Write> VectorSetBuilder<N, W> {
-    /// Create a builder that builds a set of vectors by writing it to `wtr` in a
-    /// streaming fashion.
-    pub fn new(wtr: W) -> fst::Result<VectorSetBuilder<N, W>> {
-        fst::raw::Builder::new_type(wtr, 0).map(VectorSetBuilder)
-    }
-
-    /// Insert a new vector into the set.
-    ///
-    /// If a key is inserted that is less than any previous key added, then
-    /// an error is returned. Similarly, if there was a problem writing to
-    /// the underlying writer, an error is returned.
-    pub fn insert<K: AsRef<[u8]>>(&mut self, key: K) -> fst::Result<()> {
-        let key = key.as_ref();
-        if key.len() != N {
-            return Err(fst::Error::Fst(fst::raw::Error::WrongType {
-                expected: { N as u64 },
-                got: key.len() as u64,
-            }));
+impl Cost {
+    pub fn is_non_negative(&self) -> bool {
+        match self {
+            Cost::Hamming(d) => *d >= 0,
+            Cost::L2(d) => d.is_sign_positive(),
         }
-        self.0.add(key)
     }
 
-    /// Calls insert on each item in the iterator.
-    ///
-    /// If an error occurred while adding an element, processing is stopped
-    /// and the error is returned.
-    pub fn extend_iter<T, I>(&mut self, iter: I) -> fst::Result<()>
-    where
-        T: AsRef<[u8]>,
-        I: IntoIterator<Item = T>,
-    {
-        for key in iter {
-            self.insert(key)?;
+    pub fn step(&self, from: u8, to: u8) -> Cost {
+        match self {
+            Cost::Hamming(remaining) => {
+                let step_by = i64::from((from ^ to).count_ones());
+                Cost::Hamming((*remaining).saturating_sub(step_by))
+            }
+            Cost::L2(remaining) => {
+                let from = from as f32;
+                let to = to as f32;
+                let step_by = (from - to) * (from - to);
+                Cost::L2(*remaining - step_by)
+            }
         }
-        Ok(())
-    }
-
-    /// Calls insert on each item in the stream.
-    ///
-    /// Note that unlike `extend_iter`, this is not generic on the items in
-    /// the stream.
-    pub fn extend_stream<'f, I, S>(&mut self, stream: I) -> fst::Result<()>
-    where
-        I: for<'a> IntoStreamer<'a, Into = S, Item = &'a [u8]>,
-        S: 'f + for<'a> Streamer<'a, Item = &'a [u8]>,
-    {
-        self.0.extend_stream(StreamZeroOutput(stream.into_stream()))
-    }
-
-    /// Finishes the construction of the set and flushes the underlying
-    /// writer. After completion, the data written to `W` may be read using
-    /// one of `Set`'s constructor methods.
-    pub fn finish(self) -> fst::Result<()> {
-        self.0.finish()
-    }
-
-    /// Just like `finish`, except it returns the underlying writer after
-    /// flushing it.
-    pub fn into_inner(self) -> fst::Result<W> {
-        self.0.into_inner()
-    }
-
-    /// Gets a reference to the underlying writer.
-    pub fn get_ref(&self) -> &W {
-        self.0.get_ref()
-    }
-
-    /// Returns the number of bytes written to the underlying writer
-    pub fn bytes_written(&self) -> u64 {
-        self.0.bytes_written()
     }
 }
 
-pub struct VectorSet<const N: usize, D>(Fst<D>);
-
-#[allow(clippy::should_implement_trait)]
-impl<const N: usize> VectorSet<N, Vec<u8>> {
-    /// Create a vector set from an iterator of vectors
-    /// of the assumed size.
-    pub fn from_iter<I, K>(iter: I) -> fst::Result<VectorSet<N, Vec<u8>>>
-    where
-        I: Iterator<Item = K>,
-        K: AsRef<[u8]>,
-    {
-        let mut builder = VectorSetBuilder::memory();
-        for item in iter {
-            let key = item.as_ref();
-            builder.insert(key)?;
+impl std::fmt::Display for Cost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Cost::Hamming(v) => {
+                write!(f, "{}", *v)
+            }
+            Cost::L2(v) => {
+                write!(f, "{:.3}", *v)
+            }
         }
-        Ok(builder.into_vector_set())
     }
 }
 
-impl<const N: usize, D> VectorSet<N, D>
-where
-    D: AsRef<[u8]>,
-{
-    /// Creates a vector set from its representation as a raw byte sequence.
-    ///
-    /// This accepts anything that can be cheaply converted to a `&[u8]`. The
-    /// caller is responsible for guaranteeing that the given bytes refer to
-    /// a valid FST. While memory safety will not be violated by invalid input,
-    /// a panic could occur while reading the FST at any point.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use vector_set::VectorSet;
-    ///
-    /// // File written from a build script using SetBuilder.
-    /// # const IGNORE: &str = stringify! {
-    /// static FST: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/vector_set.fst"));
-    /// # };
-    /// # static FST: &[u8] = &[];
-    ///
-    /// const DIM: usize = 4;
-    /// let set = VectorSet::<DIM, _>::new(FST).unwrap();
-    /// ```
-    pub fn new(data: D) -> fst::Result<VectorSet<N, D>> {
-        fst::raw::Fst::new(data).map(VectorSet)
-    }
+#[derive(Debug)]
+pub struct RangeSearch<'a, const N: usize> {
+    query: &'a [u8],
+    max_distance: Cost,
+}
 
-    /// Get a stream of vectors stored in the set
-    /// that are at most the given distance away from the
-    /// query vector.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use vector_set::VectorSet;
-    /// use fst::IntoStreamer;
-    ///
-    /// let mut data: Vec<[u8; 144]> = vec![
-    ///     [0; 144],
-    ///     [1; 144],
-    ///     [2; 144],
-    /// ];
-    /// data.sort();
-    ///
-    /// let vset = VectorSet::<144, _>::from_iter(data.iter()).unwrap();
-    /// let stream = vset.neighbors_within_range_l2(&[3u8; 144], 144.0 * 2.0 * 2.0).into_stream();
-    /// let neighbors= stream.into_byte_keys();
-    /// assert_eq!(neighbors, vec![
-    ///     vec![1; 144],
-    ///     vec![2; 144],
-    /// ]);
-    /// ```
-    pub fn neighbors_within_range_l2<'own, 'q>(
-        &'own self,
-        query: &'q [u8],
-        max_distance_squared: f32,
-    ) -> fst::raw::Stream<'own, VectorSetAutomata<'q, N>>
-    where
-        'own: 'q,
-    {
-        let aut = VectorSetAutomata::<N>::new(query, Budget::L2(max_distance_squared));
-        self.0.search(aut).into_stream()
-    }
-
-    /// Get a stream of vectors stored in the set
-    /// that are at most the given distance away from the
-    /// query vector.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use vector_set::VectorSet;
-    /// use fst::IntoStreamer;
-    ///
-    /// let mut data: Vec<[u8; 2]> = vec![
-    ///     [255, 255],
-    ///     [0, 0]
-    /// ];
-    /// data.sort();
-    ///
-    /// let vset = VectorSet::<2, _>::from_iter(data.iter()).unwrap();
-    /// let stream = vset.neighbors_within_range_hamming(&[1, 1], 2).into_stream();
-    /// let neighbors = stream.into_byte_keys();
-    /// assert_eq!(neighbors, vec![
-    ///     vec![0, 0],
-    /// ]);
-    /// ```
-    pub fn neighbors_within_range_hamming<'own, 'q>(
-        &'own self,
-        query: &'q [u8],
-        max_distance: i64,
-    ) -> fst::raw::Stream<'own, VectorSetAutomata<'q, N>>
-    where
-        'own: 'q,
-    {
-        let aut = VectorSetAutomata::<N>::new(query, Budget::Hamming(max_distance));
-        self.0.search(aut).into_stream()
+impl<'a, const N: usize> RangeSearch<'a, N> {
+    pub fn new(query: &'a [u8], max_distance: Cost) -> Self {
+        Self {
+            query,
+            max_distance,
+        }
     }
 }
 
-impl<'s, 'a, const N: usize, D: AsRef<[u8]>> IntoStreamer<'a> for &'s VectorSet<N, D> {
-    type Item = &'a [u8];
-    type Into = Stream<'s>;
+#[derive(Debug, Clone, Copy)]
+pub struct RangeSearchState {
+    budget: Cost,
+    position: usize,
+    query_is_bad_size: bool,
+}
 
-    #[inline]
-    fn into_stream(self) -> Stream<'s> {
-        Stream(self.0.stream())
+impl std::fmt::Display for RangeSearchState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(budget: {}, position: {})", self.budget, self.position)
     }
 }
 
-/// A lexicographically ordered stream of keys from a vector set.
-///
-/// The `A` type parameter corresponds to an optional automaton to filter
-/// the stream. By default, no filtering is done.
-///
-/// The `'s` lifetime parameter refers to the lifetime of the underlying vector set.
-pub struct Stream<'s, A = fst::automaton::AlwaysMatch>(fst::raw::Stream<'s, A>)
-where
-    A: Automaton;
+impl<const N: usize> Automaton for RangeSearch<'_, N> {
+    type State = RangeSearchState;
 
-impl<'a, 's, A: Automaton> Streamer<'a> for Stream<'s, A> {
-    type Item = &'a [u8];
+    fn start(&self) -> Self::State {
+        RangeSearchState {
+            budget: self.max_distance,
+            position: 0,
+            query_is_bad_size: self.query.len() != { N },
+        }
+    }
+    fn accept(&self, state: &Self::State, byte: u8) -> Self::State {
+        RangeSearchState {
+            // try to take a step, consuming some of our budget.
+            budget: state.budget.step(self.query[state.position], byte),
+            position: state.position + 1,
+            query_is_bad_size: false,
+        }
+    }
 
-    fn next(&'a mut self) -> Option<&'a [u8]> {
-        self.0.next().map(|(key, _)| key)
+    fn is_match(&self, state: &Self::State) -> bool {
+        if state.query_is_bad_size {
+            return false;
+        }
+        state.position == { N } && state.budget.is_non_negative()
+    }
+
+    fn can_match(&self, state: &Self::State) -> bool {
+        // we already know the query vector is of an incompatible
+        // size.
+        if state.query_is_bad_size {
+            return false;
+        }
+        // our scanned vector is larger than what we're expecting.
+        if state.position > { N } {
+            return false;
+        }
+        // can only match if there is any budget left at all.
+        state.budget.is_non_negative()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
-    use fst::IntoStreamer;
-    use fst::raw::Builder;
+    use fst::{IntoStreamer, MapBuilder, Streamer};
+    use fst::set::SetBuilder;
+    use rand::{prelude::*, rng};
+    use arbitrary::{Arbitrary, Unstructured};
+
+    fn generate_data<const SIZE: usize>(count: usize) -> Vec<[u8; SIZE]> {
+        let mut rng = rng();
+        let mut buffer=  [0u8; 1024];
+        let mut vectors = vec![];
+        for _ in 0..count {
+            rng.fill_bytes(&mut buffer);
+            let data: [u8; SIZE] = Arbitrary::arbitrary(&mut Unstructured::new(&buffer)).unwrap();
+            vectors.push(data);
+        }
+        vectors
+    }
 
     #[test]
     fn automaton_works() {
-        let mut builder = Builder::memory();
+        let mut builder = SetBuilder::memory();
         let mut data = vec![[0u8, 255, 255, 255], [255, 255, 255, 255], [1, 1, 1, 1]];
         data.sort();
 
         for vector in data {
-            builder.add(vector).unwrap();
+            builder.insert(vector).unwrap();
         }
 
-        let fst = builder.into_fst();
+        let set = builder.into_set();
 
         let query = [0, 0, 0, 0];
 
-        let aut = VectorSetAutomata::<4>::new(&query, Budget::Hamming(5));
-        let stream = fst.search(aut).into_stream();
-        let observed_matches = stream.into_byte_keys();
+        let aut = RangeSearch::<4>::new(&query, Cost::Hamming(5));
+        let stream = set.search(aut).into_stream();
+        let observed_matches = stream.into_bytes();
         assert_eq!(observed_matches, vec![vec![1, 1, 1, 1]]);
     }
 
-    #[test]
-    fn vectorset_works() {
-        let mut data: Vec<[u8; 144]> = vec![[0; 144], [1; 144], [2; 144]];
-        data.sort();
+    pub fn naive_distance_l2(v1: &[u8], v2: &[u8]) -> f32 {
+        let mut dist: f32 = 0.;
+        for (&b1, &b2) in v1.iter().zip(v2) {
+            dist += ((b1 as f32) - (b2 as f32)) * ((b1 as f32) - (b2 as f32))
+        }
+        dist
+    }
 
-        let vset = VectorSet::<144, _>::from_iter(data.iter()).unwrap();
-        let stream = vset
-            .neighbors_within_range_l2(&[3u8; 144], 144.0 * 2.0 * 2.0)
-            .into_stream();
-        let neighbors = stream.into_byte_keys();
-        assert_eq!(neighbors, vec![data[1], data[2],]);
+    #[test]
+    fn automaton_correctness_l2() {
+        // generate 1M vectors.
+        let mut data: Vec<[u8; 144]> = generate_data::<144>(1_000_000);
+        data.sort();
+        eprintln!("finished sorting...");
+        let data_with_ids: Vec<_> = data.into_iter().enumerate().collect();
+
+        let mut builder = MapBuilder::memory();
+        for (idx, vector) in data_with_ids.iter() {
+            builder.insert(*vector, *idx as u64).unwrap();
+        }
+        let map = builder.into_map();
+        eprintln!("finished generating map. begin searches.");
+        let query = generate_data::<144>(1)[0];
+
+        let max_distance: f32 = 1_500_000.0;
+        let aut = RangeSearch::<144>::new(&query, Cost::L2(max_distance));
+        let mut stream = map.search(aut).into_stream();
+        let mut hit_indices = HashSet::new();
+
+        while let Some((key, idx)) = stream.next() {
+            let distance=  naive_distance_l2(&query, key);
+            assert!(distance <= max_distance);
+            hit_indices.insert(idx);
+        }
+        eprintln!("hits: {}", hit_indices.len());
+        let non_hits: Vec<_> = 
+            data_with_ids
+            .iter()
+            .filter_map(|(idx, vector)| {
+                match hit_indices.contains(&(*idx as u64)) {
+                    false => Some(*vector),
+                    true => None
+                }
+            })
+            .collect();
+    
+        eprintln!("non hits: {}", non_hits.len());
+        for non_hit in non_hits {
+            let distance=  naive_distance_l2(&query, &non_hit);
+            assert!(distance > max_distance);
+        }
+    }
+
+    #[test]
+    fn get_single_hit() {
+        let count: usize = 100_000;
+        const SIZE: usize = 144;
+        // generate vectors.
+        let mut data: Vec<[u8; SIZE]> = generate_data::<SIZE>(count);
+        eprintln!("generated {count} vectors of dimension {SIZE}...");
+        data.sort();
+        eprintln!("sorted {count} vectors of dimension {SIZE}...");
+
+        let mut builder = SetBuilder::memory();
+        for vector in data.iter() {
+            builder.insert(*vector).unwrap();
+        }
+        let set = builder.into_set();
+        eprintln!("finished generating set. begin searches.");
+        
+        let num_searches: usize = 1_000;
+        // generate search queries.
+        let queries: Vec<[u8; SIZE]> = generate_data::<SIZE>(num_searches);
+        eprintln!("generated {num_searches} query vectors of dimension {SIZE}...");
+
+        let max_distance: f32 = 1_000_000.0;
+        let mut hits = 0;
+        let mut search_times = Vec::with_capacity(num_searches);
+        let mut seen = 0;
+        for query in queries {
+            let aut = RangeSearch::<144>::new(&query, Cost::L2(max_distance));
+            let mut stream = set.search_with_state(aut).into_stream();
+            let search_time = std::time::Instant::now();
+            if let Some((_hit, state)) = stream.next() {
+                eprintln!("hit state: {state}");
+                // found some hit.
+                hits += 1;
+            }
+            seen += 1;
+            let elapsed = search_time.elapsed();
+            eprintln!("seen so far: {}", seen);
+            search_times.push(elapsed.as_nanos());
+        }
+        eprintln!(
+            "search times (ns): max={} min={} mean={} total={} hits={}", 
+            search_times.iter().max().unwrap(),
+            search_times.iter().min().unwrap(),
+            search_times.iter().copied().sum::<u128>() / search_times.len() as u128,
+            num_searches,
+            hits,
+        );
+        eprintln!("total hits: {hits} at max_distance={max_distance:.4} out of {num_searches} queries against {count} vectors.");
+
     }
 }

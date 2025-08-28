@@ -5,3 +5,7 @@ edition = "2024"
 
 [dependencies]
 fst = "0.4.7"
+
+[dev-dependencies]
+arbitrary = { version = "1.4.2", features = ["derive"] }
+rand = "0.9.2"
