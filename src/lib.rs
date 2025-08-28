@@ -17,7 +17,7 @@ impl<'a, const N: usize> RangeSearch<'a, N>
     /// # Examples
     /// 
     /// - An automaton that accepts only (144,)-u8 vectors if they are within a squared L2-distance
-    /// of 100_000.0 apart of a given query vector.
+    ///   of 100_000.0 apart of a given query vector.
     /// ```rust
     /// use range_search::RangeSearch;
     /// use fst::{Automaton, set::{Set, SetBuilder}, IntoStreamer, Streamer};
@@ -60,7 +60,7 @@ impl<'a, const N: usize> RangeSearch<'a, N>
     pub fn new_l2(query: &'a [u8], max_distance_squared: f32) -> Self {
         Self {
             query,
-            max_distance: max_distance_squared as f32,
+            max_distance: max_distance_squared,
             distance_fn: Box::new(l2_step),
         }
     }
@@ -83,7 +83,7 @@ impl<const N: usize> Automaton for RangeSearch<'_, N> {
     }
 
     fn accept(&self, state: &Self::State, byte: u8) -> Self::State {
-        let step_by = (&self.distance_fn)(self.query[state.1], byte);
+        let step_by = (self.distance_fn)(self.query[state.1], byte);
         (state.0 - step_by, state.1 + 1, false)
     }
 
