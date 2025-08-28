@@ -38,7 +38,10 @@ impl<'a, const N: usize> RangeSearch<'a, N> {
         F: Fn(u8, u8) -> f32 + 'static,
     {
         if query.len() as u64 != { N as u64 } {
-            return Err(fst::Error::Fst(fst::raw::Error::WrongType { expected: { N as u64 }, got: query.len() as u64} ))
+            return Err(fst::Error::Fst(fst::raw::Error::WrongType {
+                expected: { N as u64 },
+                got: query.len() as u64,
+            }));
         }
         Ok(Self {
             query,
