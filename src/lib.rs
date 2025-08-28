@@ -33,8 +33,11 @@ impl<'a, const N: usize, D> RangeSearch<'a, N, D> {
     ///     eprintln!("found a vector within the given range of the query vector {hit:#?}");
     /// }
     /// ```
-    pub fn new(query: &'a [u8], max_distance: D, distance_fn: fn(u8, u8) -> D) -> fst::Result<Self>
-    {
+    pub fn new(
+        query: &'a [u8],
+        max_distance: D,
+        distance_fn: fn(u8, u8) -> D,
+    ) -> fst::Result<Self> {
         if query.len() as u64 != { N as u64 } {
             return Err(fst::Error::Fst(fst::raw::Error::WrongType {
                 expected: { N as u64 },
@@ -47,31 +50,35 @@ impl<'a, const N: usize, D> RangeSearch<'a, N, D> {
             distance_fn,
         })
     }
-
 }
 
 impl<'a, const N: usize> RangeSearch<'a, N, i32> {
     pub fn new_hamming(query: &'a [u8], max_distance: i32) -> fst::Result<Self> {
-        Self::new(query, max_distance, |from, to| (from ^ to).count_ones() as i32)
+        Self::new(query, max_distance, |from, to| {
+            (from ^ to).count_ones() as i32
+        })
     }
 }
 
 impl<'a, const N: usize> RangeSearch<'a, N, i64> {
     pub fn new_hamming(query: &'a [u8], max_distance: i64) -> fst::Result<Self> {
-        Self::new(query, max_distance, |from, to| (from ^ to).count_ones() as i64)
+        Self::new(query, max_distance, |from, to| {
+            (from ^ to).count_ones() as i64
+        })
     }
 }
-
 
 impl<'a, const N: usize> RangeSearch<'a, N, f32> {
     pub fn new_l2(query: &'a [u8], max_distance_squared: f32) -> fst::Result<Self> {
-        Self::new(query, max_distance_squared, |from, to| (from as f32 - to as f32) * (from as f32 - to as f32))
+        Self::new(query, max_distance_squared, |from, to| {
+            (from as f32 - to as f32) * (from as f32 - to as f32)
+        })
     }
 }
 
-impl<const N: usize, D> Automaton for RangeSearch<'_, N, D> 
+impl<const N: usize, D> Automaton for RangeSearch<'_, N, D>
 where
-    D: std::ops::Add<D, Output=D> + Copy + PartialEq + PartialOrd + Default,
+    D: std::ops::Add<D, Output = D> + Copy + PartialEq + PartialOrd + Default,
 {
     type State = (D, usize);
 
