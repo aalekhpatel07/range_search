@@ -52,29 +52,53 @@ impl<'a, const N: usize, D> RangeSearch<'a, N, D> {
     }
 }
 
-impl<'a, const N: usize> RangeSearch<'a, N, i32> {
-    pub fn new_hamming(query: &'a [u8], max_distance: i32) -> fst::Result<Self> {
-        Self::new(query, max_distance, |from, to| {
-            (from ^ to).count_ones() as i32
-        })
+
+macro_rules! impl_hamming_for {
+    ($t:ty) => {
+        impl<'a, const N: usize> RangeSearch<'a, N, $t> {
+            pub fn new_hamming(query: &'a [u8], max_distance: $t) -> fst::Result<Self> {
+                Self::new(query, max_distance, |from, to| {
+                    (from ^ to).count_ones() as $t
+                })
+            }
+        }
     }
 }
 
-impl<'a, const N: usize> RangeSearch<'a, N, i64> {
-    pub fn new_hamming(query: &'a [u8], max_distance: i64) -> fst::Result<Self> {
-        Self::new(query, max_distance, |from, to| {
-            (from ^ to).count_ones() as i64
-        })
+impl_hamming_for!{ u8 }
+impl_hamming_for!{ u16 }
+impl_hamming_for!{ u32 }
+impl_hamming_for!{ u64 }
+
+impl_hamming_for!{ i8 }
+impl_hamming_for!{ i16 }
+impl_hamming_for!{ i32 }
+impl_hamming_for!{ i64 }
+
+macro_rules! impl_l2_for {
+    ($t:ty) => {
+        impl<'a, const N: usize> RangeSearch<'a, N, $t> {
+            pub fn new_l2(query: &'a [u8], max_distance_squared: $t) -> fst::Result<Self> {
+                Self::new(query, max_distance_squared, |from, to| {
+                    (from as $t - to as $t) * (from as $t - to as $t)
+                })
+            }
+        }
     }
 }
 
-impl<'a, const N: usize> RangeSearch<'a, N, f32> {
-    pub fn new_l2(query: &'a [u8], max_distance_squared: f32) -> fst::Result<Self> {
-        Self::new(query, max_distance_squared, |from, to| {
-            (from as f32 - to as f32) * (from as f32 - to as f32)
-        })
-    }
-}
+impl_l2_for! { f32 }
+impl_l2_for! { f64 }
+
+impl_l2_for! { u16 }
+impl_l2_for! { u32 }
+impl_l2_for! { u64 }
+impl_l2_for! { u128 }
+
+impl_l2_for! { i16 }
+impl_l2_for! { i32 }
+impl_l2_for! { i64 }
+impl_l2_for! { i128 }
 
 impl<const N: usize, D> Automaton for RangeSearch<'_, N, D>
 where
@@ -172,7 +196,7 @@ mod tests {
         let query = generate_data::<144>(1)[0];
 
         let max_distance: f32 = 1_500_000.0;
-        let aut = RangeSearch::<144, _>::new_l2(&query, max_distance).unwrap();
+        let aut = RangeSearch::<144, f32>::new_l2(&query, max_distance).unwrap();
         let mut stream = map.search(aut).into_stream();
         let mut hit_indices = HashSet::new();
 
@@ -198,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn get_single_hit() {
+    fn get_single_hit_l2() {
         let count: usize = 100_000;
         const SIZE: usize = 144;
         // generate vectors.
@@ -219,12 +243,12 @@ mod tests {
         let queries: Vec<[u8; SIZE]> = generate_data::<SIZE>(num_searches);
         eprintln!("generated {num_searches} query vectors of dimension {SIZE}...");
 
-        let max_distance: f32 = 1_000_000.0;
+        let max_distance: u64  = 1_000_000;
         let mut hits = 0;
         let mut search_times = Vec::with_capacity(num_searches);
         let mut seen = 0;
         for query in queries {
-            let aut = RangeSearch::<144, _>::new_l2(&query, max_distance).unwrap();
+            let aut = RangeSearch::<SIZE, u64>::new_l2(&query, max_distance).unwrap();
             let mut stream = set.search_with_state(aut).into_stream();
             let search_time = std::time::Instant::now();
             if let Some((_hit, state)) = stream.next() {
@@ -249,4 +273,58 @@ mod tests {
             "total hits: {hits} at max_distance={max_distance:.4} out of {num_searches} queries against {count} vectors."
         );
     }
+
+    #[test]
+    fn get_single_hit_hamming() {
+        let count: usize = 100_000;
+        const SIZE: usize = 32;
+        // generate vectors.
+        let mut data: Vec<[u8; SIZE]> = generate_data::<SIZE>(count);
+        eprintln!("generated {count} vectors of dimension {SIZE}...");
+        data.sort();
+        eprintln!("sorted {count} vectors of dimension {SIZE}...");
+
+        let mut builder = SetBuilder::memory();
+        for vector in data.iter() {
+            builder.insert(*vector).unwrap();
+        }
+        let set = builder.into_set();
+        eprintln!("finished generating set. begin searches.");
+
+        let num_searches: usize = 100;
+        // generate search queries.
+        let queries: Vec<[u8; SIZE]> = generate_data::<SIZE>(num_searches);
+        eprintln!("generated {num_searches} query vectors of dimension {SIZE}...");
+
+        let max_distance: i32 = 100;
+        let mut hits = 0;
+        let mut search_times = Vec::with_capacity(num_searches);
+        let mut seen = 0;
+        for query in queries {
+            let aut = RangeSearch::<SIZE, i32>::new_hamming(&query, max_distance).unwrap();
+            let mut stream = set.search_with_state(aut).into_stream();
+            let search_time = std::time::Instant::now();
+            if let Some((_hit, state)) = stream.next() {
+                eprintln!("hit state: {state:?}");
+                // found some hit.
+                hits += 1;
+            }
+            seen += 1;
+            let elapsed = search_time.elapsed();
+            eprintln!("seen so far: {}", seen);
+            search_times.push(elapsed.as_nanos());
+        }
+        eprintln!(
+            "search times (ns): max={} min={} mean={} total={} hits={}",
+            search_times.iter().max().unwrap(),
+            search_times.iter().min().unwrap(),
+            search_times.iter().copied().sum::<u128>() / search_times.len() as u128,
+            num_searches,
+            hits,
+        );
+        eprintln!(
+            "total hits: {hits} at max_distance={max_distance:.4} out of {num_searches} queries against {count} vectors."
+        );
+    }
+
 }
