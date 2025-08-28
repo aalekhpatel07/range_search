@@ -22,7 +22,7 @@ impl<'a, const N: usize> RangeSearch<'a, N> {
     /// use fst::{Automaton, set::{Set, SetBuilder}, IntoStreamer, Streamer};
     ///
     /// let query = [0x01; 144];
-    /// let aut = RangeSearch::<144>::new_l2(&query, 100_000.0);
+    /// let aut = RangeSearch::<144>::new_l2(&query, 100_000.0).unwrap();
     ///
     /// // Suppose you have some fst::Set of vectors.
     /// let set = SetBuilder::memory().into_set();
@@ -33,31 +33,26 @@ impl<'a, const N: usize> RangeSearch<'a, N> {
     ///     eprintln!("found a vector within the given range of the query vector {hit:#?}");
     /// }
     /// ```
-    pub fn new<F>(query: &'a [u8], max_distance: f32, distance_fn: F) -> Self
+    pub fn new<F>(query: &'a [u8], max_distance: f32, distance_fn: F) -> fst::Result<Self>
     where
         F: Fn(u8, u8) -> f32 + 'static,
     {
-        Self {
+        if query.len() as u64 != { N as u64 } {
+            return Err(fst::Error::Fst(fst::raw::Error::WrongType { expected: { N as u64 }, got: query.len() as u64} ))
+        }
+        Ok(Self {
             query,
             max_distance,
             distance_fn: Box::new(distance_fn),
-        }
+        })
     }
 
-    pub fn new_hamming(query: &'a [u8], max_distance: usize) -> Self {
-        Self {
-            query,
-            max_distance: max_distance as f32,
-            distance_fn: Box::new(hamming_step),
-        }
+    pub fn new_hamming(query: &'a [u8], max_distance: usize) -> fst::Result<Self> {
+        Self::new(query, max_distance as f32, hamming_step)
     }
 
-    pub fn new_l2(query: &'a [u8], max_distance_squared: f32) -> Self {
-        Self {
-            query,
-            max_distance: max_distance_squared,
-            distance_fn: Box::new(l2_step),
-        }
+    pub fn new_l2(query: &'a [u8], max_distance_squared: f32) -> fst::Result<Self> {
+        Self::new(query, max_distance_squared, l2_step)
     }
 }
 
@@ -70,30 +65,22 @@ pub fn l2_step(from: u8, to: u8) -> f32 {
 }
 
 impl<const N: usize> Automaton for RangeSearch<'_, N> {
-    type State = (f32, usize, bool);
+    type State = (f32, usize);
 
     fn start(&self) -> Self::State {
-        (self.max_distance, 0, self.query.len() != { N })
+        (self.max_distance, 0)
     }
 
     fn accept(&self, state: &Self::State, byte: u8) -> Self::State {
         let step_by = (self.distance_fn)(self.query[state.1], byte);
-        (state.0 - step_by, state.1 + 1, false)
+        (state.0 - step_by, state.1 + 1)
     }
 
     fn is_match(&self, state: &Self::State) -> bool {
-        if state.2 {
-            return false;
-        }
         state.1 == { N } && state.0.is_sign_positive()
     }
 
     fn can_match(&self, state: &Self::State) -> bool {
-        // we already know the query vector is of an incompatible
-        // size.
-        if state.2 {
-            return false;
-        }
         // our scanned vector is larger than what we're expecting.
         if state.1 > { N } {
             return false;
@@ -139,7 +126,7 @@ mod tests {
 
         let query = [0, 0, 0, 0];
 
-        let aut = RangeSearch::<4>::new_hamming(&query, 5);
+        let aut = RangeSearch::<4>::new_hamming(&query, 5).unwrap();
         let stream = set.search(aut).into_stream();
         let observed_matches = stream.into_bytes();
         assert_eq!(observed_matches, vec![vec![1, 1, 1, 1]]);
@@ -170,7 +157,7 @@ mod tests {
         let query = generate_data::<144>(1)[0];
 
         let max_distance: f32 = 1_500_000.0;
-        let aut = RangeSearch::<144>::new(&query, max_distance, l2_step);
+        let aut = RangeSearch::<144>::new(&query, max_distance, l2_step).unwrap();
         let mut stream = map.search(aut).into_stream();
         let mut hit_indices = HashSet::new();
 
@@ -222,7 +209,7 @@ mod tests {
         let mut search_times = Vec::with_capacity(num_searches);
         let mut seen = 0;
         for query in queries {
-            let aut = RangeSearch::<144>::new_l2(&query, max_distance);
+            let aut = RangeSearch::<144>::new_l2(&query, max_distance).unwrap();
             let mut stream = set.search_with_state(aut).into_stream();
             let search_time = std::time::Instant::now();
             if let Some((_hit, state)) = stream.next() {
