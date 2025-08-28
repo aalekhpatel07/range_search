@@ -52,7 +52,6 @@ impl<'a, const N: usize, D> RangeSearch<'a, N, D> {
     }
 }
 
-
 macro_rules! impl_hamming_for {
     ($t:ty) => {
         impl<'a, const N: usize> RangeSearch<'a, N, $t> {
@@ -62,18 +61,18 @@ macro_rules! impl_hamming_for {
                 })
             }
         }
-    }
+    };
 }
 
-impl_hamming_for!{ u8 }
-impl_hamming_for!{ u16 }
-impl_hamming_for!{ u32 }
-impl_hamming_for!{ u64 }
+impl_hamming_for! { u8 }
+impl_hamming_for! { u16 }
+impl_hamming_for! { u32 }
+impl_hamming_for! { u64 }
 
-impl_hamming_for!{ i8 }
-impl_hamming_for!{ i16 }
-impl_hamming_for!{ i32 }
-impl_hamming_for!{ i64 }
+impl_hamming_for! { i8 }
+impl_hamming_for! { i16 }
+impl_hamming_for! { i32 }
+impl_hamming_for! { i64 }
 
 macro_rules! impl_l2_for {
     ($t:ty) => {
@@ -84,7 +83,7 @@ macro_rules! impl_l2_for {
                 })
             }
         }
-    }
+    };
 }
 
 impl_l2_for! { f32 }
@@ -243,7 +242,7 @@ mod tests {
         let queries: Vec<[u8; SIZE]> = generate_data::<SIZE>(num_searches);
         eprintln!("generated {num_searches} query vectors of dimension {SIZE}...");
 
-        let max_distance: u64  = 1_000_000;
+        let max_distance: u64 = 1_000_000;
         let mut hits = 0;
         let mut search_times = Vec::with_capacity(num_searches);
         let mut seen = 0;
@@ -326,5 +325,4 @@ mod tests {
             "total hits: {hits} at max_distance={max_distance:.4} out of {num_searches} queries against {count} vectors."
         );
     }
-
 }
