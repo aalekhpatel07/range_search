@@ -21,12 +21,8 @@ impl<'a, const N: usize> RangeSearch<'a, N> {
     /// use range_search::RangeSearch;
     /// use fst::{Automaton, set::{Set, SetBuilder}, IntoStreamer, Streamer};
     ///
-    /// fn l2_step(from: u8, to: u8) -> f32 {
-    ///     (from as f32 - to as f32) * (from as f32 - to as f32)
-    /// }
-    ///
     /// let query = [0x01; 144];
-    /// let aut = RangeSearch::<144>::new(&query, 100_000.0, l2_step);
+    /// let aut = RangeSearch::<144>::new_l2(&query, 100_000.0);
     ///
     /// // Suppose you have some fst::Set of vectors.
     /// let set = SetBuilder::memory().into_set();
