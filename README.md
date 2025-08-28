@@ -21,7 +21,7 @@ fn main() {
 
     // the vector we want to find neighbors for.
     let query = [0x01; 144];
-    let aut = RangeSearch::<144>::new_l2(&query, 100_000.0);
+    let aut = RangeSearch::<144>::new_l2(&query, 100_000.0).unwrap();
 
     // Suppose you have some fst::Set of vectors.
     let set = SetBuilder::memory().into_set();
@@ -44,7 +44,7 @@ fn main() {
 
     // the 256-dimensional binary vector (packed into single bit per component) that we want to find neighbors for.
     let query = [0x01; 32];
-    let aut = RangeSearch::<32>::new_hamming(&query, 5);
+    let aut = RangeSearch::<32>::new_hamming(&query, 5).unwrap();
 
     // Suppose you have some fst::Set of vectors.
     let set = SetBuilder::memory().into_set();
